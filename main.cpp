@@ -2,93 +2,92 @@
 // #include "opencv2/highgui.hpp"
 #include "opencv2/opencv.hpp"
 #include <print>
-#include <ctime>
 #include <numeric>
 #include <complex>
 #include <ranges>
+
 using namespace cv;
 
-int MAX_ITERATIONS = 4;
+int MAX_ITERATIONS = 100;
 
 const double RE_START = -2.0;
 const double RE_END = 2.0;
 const double IM_START = -2.0;
 const double IM_END = 2.0;
 
-bool calculate_pixel(double y, double x, double C) {
-    std::complex<double> z(x, y);
 
-    for (int i : std::views::iota(0, MAX_ITERATIONS))
+
+class JuliaCalculator: public ParallelLoopBody
+{
+    Mat &m_img;
+    float m_x1;
+    float m_y1;
+    float m_scaleX;
+    float m_scaleY;
+    float m_C;
+public:
+    JuliaCalculator(Mat &img, const float& x1, const float& y1, const float& scaleX, const float& scaleY, const float& C)
+    : m_img(img), m_x1(x1), m_y1(y1), m_scaleX(scaleX), m_scaleY(scaleY), m_C(C)
+    {}
+
+    virtual void operator()(const Range &range) const CV_OVERRIDE
     {
-        if (std::norm(z) > 4.0)
-            return false;
+        for (int r : std::views::iota(range.start, range.end))
+        {
+            int y = r / m_img.size().height;
+            int x = r % m_img.size().width;
 
-        z = z * z - C;
+            double map_x = RE_START + (x / (double)m_img.cols) * (RE_END - RE_START);
+            double map_y = IM_START + (y / (double)m_img.rows) * (IM_END - IM_START);
+
+            if (calculate_pixel(map_y, map_x, m_C)) {
+               m_img.at<uchar>(y, x) = 0; // Точка внутри множества (черный)
+            } else {
+               m_img.at<uchar>(y, x) = 255; // Точка улетела (белый)
+            }
+        }
     }
-    return true;
-}
+
+
+    bool calculate_pixel(const double& y, const double& x, const double& C) const{
+        std::complex<double> z(x, y);
+
+        for (int i : std::views::iota(0, MAX_ITERATIONS))
+        {
+            if (std::norm(z) > 4.0)
+                return false;
+
+            z = std::pow(z, 5) - C + std::complex<double>(0.0, 0.003);
+        }
+        return true;
+    }
+};
+
+
 
 int main( int argc, char** argv )
 {
-
-    int SIZE_X = 640, SIZE_Y = 640;
+    int SIZE_X = 4280, SIZE_Y = 4280;
     cv::namedWindow("Winda", cv::WINDOW_NORMAL);
+    cv::Mat_<uchar> juliaImg(SIZE_X, SIZE_Y);
 
-
-    cv::Mat_<double> display(SIZE_X, SIZE_Y);
-    for (double C = -3.28; C <= 4.0; C+=0.005)
+    // for (double C = -0.6099999999999996 ; C <= -0.4999999; C+=0.005)
+    double C = 0.549653;
     {
 
-        for (auto y: std::views::iota(0, SIZE_Y))
-        {
-            for (auto x: std::views::iota(0, SIZE_X))
-            {
-                double map_x = RE_START + (x / (double)SIZE_X) * (RE_END - RE_START);
-                double map_y = IM_START + (y / (double)SIZE_Y) * (IM_END - IM_START);
+        JuliaCalculator parallelJulia(juliaImg, 0, 0, SIZE_X, SIZE_Y, C);
+        parallel_for_(Range(0, juliaImg.rows*juliaImg.cols), parallelJulia);
 
-                if (calculate_pixel(map_y, map_x, C)) {
-                    display(y, x) = 0.0; // Точка внутри множества (черный)
-                } else {
-                    display(y, x) = 1.0; // Точка улетела (белый)
-                }
 
-            }
-        }
-        std::print("displaying... {}", C);
-        cv::imshow("Winda", display);
+        std::print("displaying... {} \n.", C);
+        cv::imshow("Winda", juliaImg);
         auto key = cv::waitKey(1);
 
         if (key == 'q') {
-            break;
+            //break;
         }
-
     }
+    waitKey(0);
+    cv::destroyAllWindows();
 
-    destroyAllWindows();
-
-
-
-
-
-    //
-    // srand(time(0));
-    // int size[] = {10, 10};
-    // cv::SparseMat sm(2, size, CV_32F);
-    // for(int i = 0; i < 10; i++)
-    // {
-    //     int idx[2];
-    //     idx[0] = rand() % size[0];
-    //     idx[1] = rand() % size[1];
-    //
-    //     sm.ref<float>(idx) += 1.0f;
-    // }
-    //
-    // cv::SparseMatConstIterator_<float> it = sm.begin<float>();
-    // cv::SparseMatConstIterator_<float> it_end = sm.end<float>();
-    //
-    // for(; it != it_end; it++)
-    // {
-    //     const cv::SparseMat::Node* node = it.node();
-    //     std::print(" ({}, {}) = {}\n", node->idx[0], node->idx[1], *it);
-    // }
 }
