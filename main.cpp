@@ -40,26 +40,27 @@ public:
             double map_x = RE_START + (x / (double)m_img.cols) * (RE_END - RE_START);
             double map_y = IM_START + (y / (double)m_img.rows) * (IM_END - IM_START);
 
-            if (calculate_pixel(map_y, map_x, m_C)) {
-               m_img.at<uchar>(y, x) = 0; // Точка внутри множества (черный)
-            } else {
-               m_img.at<uchar>(y, x) = 255; // Точка улетела (белый)
-            }
+            // if (calculate_pixel(map_y, map_x, m_C)) {
+            //    m_img.at<uchar>(y, x) = 0; // Точка внутри множества (черный)
+            // } else {
+            //    m_img.at<uchar>(y, x) = 255; // Точка улетела (белый)
+            // }
+            m_img.at<uchar>(y, x) = calculate_pixel(map_y, map_x, m_C);
         }
     }
 
 
-    bool calculate_pixel(const double& y, const double& x, const double& C) const{
+    uchar calculate_pixel(const double& y, const double& x, const double& C) const{
         std::complex<double> z(x, y);
 
         for (int i : std::views::iota(0, MAX_ITERATIONS))
         {
             if (std::norm(z) > 4.0)
-                return false;
+                return 255/std::norm(z);
 
             z = std::pow(z, 5) - C + std::complex<double>(0.0, 0.003);
         }
-        return true;
+        return 0;
     }
 };
 
@@ -67,7 +68,7 @@ public:
 
 int main( int argc, char** argv )
 {
-    int SIZE_X = 4280, SIZE_Y = 4280;
+    int SIZE_X = 14280, SIZE_Y = 14280;
     cv::namedWindow("Winda", cv::WINDOW_NORMAL);
     cv::Mat_<uchar> juliaImg(SIZE_X, SIZE_Y);
 
