@@ -66,7 +66,7 @@ public:
 
 int main( int argc, char** argv )
 {
-    int SIZE_X = 16280, SIZE_Y = 16280;
+    int SIZE_X = 4280, SIZE_Y = 4280;
     cv::namedWindow("Winda", cv::WINDOW_NORMAL);
     cv::Mat_<uchar> juliaImg(SIZE_X, SIZE_Y);
     cv::Mat colorJuliaImg(SIZE_X, SIZE_Y, CV_8UC3);
@@ -79,12 +79,8 @@ int main( int argc, char** argv )
         JuliaCalculator parallelJulia(juliaImg, 0, 0, SIZE_X, SIZE_Y, C);
         parallel_for_(Range(0, juliaImg.rows*juliaImg.cols), parallelJulia);
 
-        cv::normalize(juliaImg, normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
+        cv::normalize(juliaImg, normalized, 0, 255, cv::NORM_MINMAX, CV_8U, juliaImg);
         cv::applyColorMap(normalized, colorJuliaImg, cv::COLORMAP_TURBO ); //exception
-        cv::putText(colorJuliaImg, "Lubu", cv::Point2i(1414, 7279), cv::FONT_HERSHEY_SCRIPT_SIMPLEX, 1.0, cv::Scalar(255, 255, 255, 0));
-        cv::putText(colorJuliaImg, "Prilubu", cv::Point2i(1414, 7319), cv::FONT_HERSHEY_SCRIPT_SIMPLEX, 1.0, cv::Scalar(255, 255, 255, 0));
-        cv::putText(colorJuliaImg, "KIRA, I LOVE YOU!", cv::Point2i(12712, 10753), cv::FONT_HERSHEY_SCRIPT_SIMPLEX, 1.0, cv::Scalar(255, 255, 255, 0));
-        cv::putText(colorJuliaImg, "much ^*^", cv::Point2i(12712, 10793), cv::FONT_HERSHEY_SCRIPT_SIMPLEX, 1.0, cv::Scalar(255, 255, 255, 0));
 
         cv::imshow("Winda", colorJuliaImg);
 
