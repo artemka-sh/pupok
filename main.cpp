@@ -1,103 +1,119 @@
-// #include "opencv2/core.hpp"
-// #include "opencv2/highgui.hpp"
-#include "opencv2/opencv.hpp"
-#include <print>
-#include <numeric>
-#include <complex>
-#include <ranges>
+#include <iostream>
+#include <cmath>
+#include <opencv2/core.hpp>
+#include <opencv2/core/optim.hpp>
 
 using namespace cv;
+using namespace std;
 
-int MAX_ITERATIONS = 700;
+// Функция для получения матрицы дрейфа
+Matx22d getDrift(double L) {
+    return Matx22d(1.0, L,
+                   0.0, 1.0);
+}
 
-const double RE_START = -1.0;
-const double RE_END = 1.0;
-const double IM_START = -1.0;
-const double IM_END = 1.0;
+// Функция для получения матрицы квадруполя
+// is_x = true для горизонтальной плоскости, false для вертикальной
+Matx22d getQuad(double L, double K, bool is_x) {
+    if (abs(K) < 1e-9) return getDrift(L);
 
+    // В одной плоскости квадруполь фокусирует (K>0), в другой - дефокусирует (K<0)
+    double k_val = is_x ? K : -K;
+    double sqrtK = sqrt(abs(k_val));
 
-
-class JuliaCalculator: public ParallelLoopBody
-{
-    Mat &m_img;
-    float m_x1;
-    float m_y1;
-    float m_scaleX;
-    float m_scaleY;
-    float m_C;
-public:
-    JuliaCalculator(Mat &img, const float& x1, const float& y1, const float& scaleX, const float& scaleY, const float& C)
-    : m_img(img), m_x1(x1), m_y1(y1), m_scaleX(scaleX), m_scaleY(scaleY), m_C(C)
-    {}
-
-    virtual void operator()(const Range &range) const CV_OVERRIDE
-    {
-        for (int r : std::views::iota(range.start, range.end))
-        {
-            int y = r / m_img.size().height;
-            int x = r % m_img.size().width;
-
-            double map_x = RE_START + (x / (double)m_img.cols) * (RE_END - RE_START);
-            double map_y = IM_START + (y / (double)m_img.rows) * (IM_END - IM_START);
-
-            m_img.at<uchar>(y, x) = calculate_pixel(map_y, map_x, m_C);
-        }
+    if (k_val > 0) { // Фокусировка
+        return Matx22d(cos(sqrtK * L),          (1.0 / sqrtK) * sin(sqrtK * L),
+                       -sqrtK * sin(sqrtK * L), cos(sqrtK * L));
+    } else {         // Дефокусировка
+        return Matx22d(cosh(sqrtK * L),         (1.0 / sqrtK) * sinh(sqrtK * L),
+                       sqrtK * sinh(sqrtK * L), cosh(sqrtK * L));
     }
+}
 
+// Трансформация матрицы Твисса (эллипса) через матрицу элемента: T_out = M * T_in * M^T
+Matx22d transformTwiss(const Matx22d& T_in, const Matx22d& M) {
+    return M * T_in * M.t();
+}
 
-    uchar calculate_pixel(const double& y, const double& x, const double& C) const{
-        std::complex<double> z(x, y);
+// Целевая функция для оптимизатора OpenCV
+class BeamMatchingObjective : public MinProblemSolver::Function {
+public:
+    int getDims() const override { return 4; } // У нас 4 квадруполя (4 переменных K)
 
-        for (int i : std::views::iota(0, MAX_ITERATIONS))
-        {
-            if (std::norm(z) > 4.0)
-            {
-                // double smooth = i + 1 - std::log(std::log(std::abs(z))) / std::log(2.0);
-                return static_cast<uchar>(255 * i / MAX_ITERATIONS);
-            }
+    double calc(const double* x) const override {
+        // Силы квадруполей (наши переменные для оптимизации)
+        double K1 = x[0], K2 = x[1], K3 = x[2], K4 = x[3];
 
-            z = std::pow(z, 5) - C + std::complex<double>(0.0, 0.003);
+        // Длины элементов (в метрах). Можно менять под ваши габариты.
+        double L_drift = 1.0;
+        double L_quad = 0.5;
+
+        // Создаем матрицы для X и Y плоскостей
+        Matx22d Mx = Matx22d::eye();
+        Matx22d My = Matx22d::eye();
+
+        // Собираем линию: Дрейф -> Квад1 -> Дрейф -> Квад2 -> Дрейф -> Квад3 -> Дрейф -> Квад4 -> Дрейф
+        double K_vals[4] = {K1, K2, K3, K4};
+        for (int i = 0; i < 4; ++i) {
+            Mx = getDrift(L_drift) * Mx;
+            My = getDrift(L_drift) * My;
+
+            Mx = getQuad(L_quad, K_vals[i], true) * Mx;
+            My = getQuad(L_quad, K_vals[i], false) * My;
         }
-        return 0;
+        Mx = getDrift(L_drift) * Mx;
+        My = getDrift(L_drift) * My;
+
+        // Начальные параметры Твисса (Таблица 1)
+        double bx0 = 5.0, ax0 = -0.5, gx0 = (1 + ax0*ax0) / bx0;
+        double by0 = 2.5, ay0 = 0.3,  gy0 = (1 + ay0*ay0) / by0;
+        Matx22d Tx0(bx0, -ax0, -ax0, gx0);
+        Matx22d Ty0(by0, -ay0, -ay0, gy0);
+
+        // Прогоняем пучок через систему
+        Matx22d Tx_out = transformTwiss(Tx0, Mx);
+        Matx22d Ty_out = transformTwiss(Ty0, My);
+
+        // Целевые параметры (Таблица 2)
+        double bx_target = 8.0, ax_target = 0.0;
+        double by_target = 4.0, ay_target = 0.0;
+
+        // Вычисляем ошибку (Loss). Чем ближе к нулю, тем лучше.
+        double loss = pow(Tx_out(0,0) - bx_target, 2) +
+                      pow(-Tx_out(0,1) - ax_target, 2) +
+                      pow(Ty_out(0,0) - by_target, 2) +
+                      pow(-Ty_out(0,1) - ay_target, 2);
+
+        return loss;
     }
 };
 
+int main() {
+    Ptr<DownhillSolver> solver = DownhillSolver::create();
+    Ptr<MinProblemSolver::Function> objFunc = makePtr<BeamMatchingObjective>();
+    solver->setFunction(objFunc);
 
+    // Начальное приближение для сил квадруполей K1, K2, K3, K4
+    Mat x = (Mat_<double>(1, 4) << 1.0, -1.0, 1.0, -1.0);
 
-int main( int argc, char** argv )
-{
-    int SIZE_X = 4280, SIZE_Y = 4280;
-    cv::namedWindow("Winda", cv::WINDOW_NORMAL);
-    cv::Mat_<uchar> juliaImg(SIZE_X, SIZE_Y);
-    cv::Mat colorJuliaImg(SIZE_X, SIZE_Y, CV_8UC3);
-    cv::Mat normalized;
+    // Шаг для симплекса
+    Mat step = (Mat_<double>(1, 4) << 0.1, 0.1, 0.1, 0.1);
+    solver->setInitStep(step);
 
-    // for (double C = -0.6099999999999996 ; C <= -0.4999999; C+=0.005)
-    double C = 0.549653;
-    {
-        std::print("displaying... {} \n.", C);
-        JuliaCalculator parallelJulia(juliaImg, 0, 0, SIZE_X, SIZE_Y, C);
-        parallel_for_(Range(0, juliaImg.rows*juliaImg.cols), parallelJulia);
+    // Критерии остановки (точность)
+    TermCriteria termcrit(TermCriteria::MAX_ITER + TermCriteria::EPS, 10000, 1e-6);
+    solver->setTermCriteria(termcrit);
 
-        cv::normalize(juliaImg, normalized, 0, 255, cv::NORM_MINMAX, CV_8U, juliaImg);
-        cv::applyColorMap(normalized, colorJuliaImg, cv::COLORMAP_TURBO ); //exception
+    // Запуск оптимизации
+    double res = solver->minimize(x);
 
-        cv::imshow("Winda", colorJuliaImg);
+    cout << "Оптимизация завершена." << endl;
+    cout << "Финальная ошибка (Loss): " << res << endl;
+    cout << "Подобранные параметры квадруполей (K):" << endl;
+    cout << "K1 = " << x.at<double>(0, 0) << " m^-2" << endl;
+    cout << "K2 = " << x.at<double>(0, 1) << " m^-2" << endl;
+    cout << "K3 = " << x.at<double>(0, 2) << " m^-2" << endl;
+    cout << "K4 = " << x.at<double>(0, 3) << " m^-2" << endl;
 
-        imwrite("julia_gray.jpg", juliaImg);
-        imwrite("julia.jpg", colorJuliaImg);
-        auto key = cv::waitKey(1);
-
-        if (key == 'q') {
-            //break;
-        }
-    }
-    waitKey(0);
-
-
-    double minVal, maxVal;
-    cv::minMaxLoc(juliaImg, &minVal, &maxVal);
-    std::print("min: {}, max: {}", minVal, maxVal);
-    cv::destroyAllWindows();
-
+    return 0;
 }
