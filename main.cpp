@@ -1,6 +1,6 @@
 #include <iostream>
 #include <cmath>
-#include <opencv2/core.hpp>
+#include <opencv2/opencv.hpp>
 #include <opencv2/core/optim.hpp>
 
 using namespace cv;
@@ -89,7 +89,98 @@ public:
     }
 };
 
+void drawBeamEnvelope(double K1, double K2, double K3, double K4) {
+    // Параметры для шага
+    double ds = 0.01; // Шаг 1 см
+    double L_drift = 1.0;
+    double L_quad = 0.5;
+
+    // Эмиттансы (из таблиц, в нм*рад)
+    double eps_x = 10e-9;
+    double eps_y = 2e-9;
+
+    // Начальные параметры Твисса
+    double bx = 5.0, ax = -0.5, gx = (1 + ax*ax)/bx;
+    double by = 2.5, ay = 0.3,  gy = (1 + ay*ay)/by;
+    Matx22d Tx(bx, -ax, -ax, gx);
+    Matx22d Ty(by, -ay, -ay, gy);
+
+    // Массивы для хранения точек графика: (координата S, размер пучка Sigma)
+    vector<Point2d> env_x, env_y;
+    double current_s = 0.0;
+
+    // Лямбда-функция для прохода по элементу (дрейф или квадруполь)
+    auto trackElement = [&](double length, double K) {
+        int steps = round(length / ds);
+        for (int i = 0; i < steps; ++i) {
+            // Считаем размер пучка в текущей точке
+            double sigma_x = sqrt(eps_x * Tx(0,0)); // Tx(0,0) это beta_x
+            double sigma_y = sqrt(eps_y * Ty(0,0));
+
+            env_x.push_back(Point2d(current_s, sigma_x));
+            env_y.push_back(Point2d(current_s, sigma_y));
+
+            // Продвигаем матрицу Твисса на шаг ds
+            Matx22d Mx_step = getQuad(ds, K, true);
+            Matx22d My_step = getQuad(ds, K, false);
+
+            Tx = transformTwiss(Tx, Mx_step);
+            Ty = transformTwiss(Ty, My_step);
+
+            current_s += ds;
+        }
+    };
+
+    // Собираем линию с найденными параметрами K
+    trackElement(L_drift, 0.0);
+    trackElement(L_quad, K1);
+    trackElement(L_drift, 0.0);
+    trackElement(L_quad, K2);
+    trackElement(L_drift, 0.0);
+    trackElement(L_quad, K3);
+    trackElement(L_drift, 0.0);
+    trackElement(L_quad, K4);
+    trackElement(L_drift, 0.0);
+
+    // --- Отрисовка в OpenCV ---
+    int img_w = 1000, img_h = 600;
+    Mat plot = Mat::ones(img_h, img_w, CV_8UC3) * 255; // Белый фон
+
+    // Поиск максимальных значений для масштабирования
+    double max_sigma = 0;
+    for(auto& p : env_x) max_sigma = max(max_sigma, p.y);
+    for(auto& p : env_y) max_sigma = max(max_sigma, p.y);
+    max_sigma *= 1.2; // Отступ сверху
+
+    // Функция перевода физических координат в пиксели
+    auto toPixel = [&](Point2d pt) {
+        int px = cvRound((pt.x / current_s) * (img_w - 100)) + 50;
+        int py = img_h - 50 - cvRound((pt.y / max_sigma) * (img_h - 100));
+        return Point(px, py);
+    };
+
+    // Отрисовка осей
+    line(plot, Point(50, img_h-50), Point(img_w-50, img_h-50), Scalar(0,0,0), 2); // X
+    line(plot, Point(50, img_h-50), Point(50, 50), Scalar(0,0,0), 2); // Y
+
+    // Отрисовка графиков
+    for (size_t i = 1; i < env_x.size(); ++i) {
+        // X - красным (горизонтальная плоскость)
+        line(plot, toPixel(env_x[i-1]), toPixel(env_x[i]), Scalar(0, 0, 255), 2);
+        // Y - синим (вертикальная плоскость)
+        line(plot, toPixel(env_y[i-1]), toPixel(env_y[i]), Scalar(255, 0, 0), 2);
+    }
+
+    // Добавим легенду
+    putText(plot, "X Envelope (Red)", Point(70, 70), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(0, 0, 255), 2);
+    putText(plot, "Y Envelope (Blue)", Point(70, 100), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 0, 0), 2);
+
+    imshow("Beam Envelope", plot);
+    waitKey(0);
+}
+
 int main() {
+    cv::namedWindow("Beam Envelope", cv::WINDOW_NORMAL);
     Ptr<DownhillSolver> solver = DownhillSolver::create();
     Ptr<MinProblemSolver::Function> objFunc = makePtr<BeamMatchingObjective>();
     solver->setFunction(objFunc);
@@ -116,5 +207,6 @@ int main() {
     cout << "K3 = " << x.at<double>(0, 2) << " m^-2" << endl;
     cout << "K4 = " << x.at<double>(0, 3) << " m^-2" << endl;
 
+    drawBeamEnvelope(x.at<double>(0,0), x.at<double>(0,1), x.at<double>(0,2), x.at<double>(0,3));
     return 0;
 }
