@@ -49,6 +49,7 @@ public:
         double L_quad = 0.5;
 
         // Создаем матрицы для X и Y плоскостей
+
         Matx22d Mx = Matx22d::eye();
         Matx22d My = Matx22d::eye();
 
