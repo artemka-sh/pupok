@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/home/bogdan/Документы/PycharmProjects/pupok/build",
+  "command": "/usr/bin/c++  -isystem /usr/include/opencv4 -std=gnu++23 -march=native -mtune=native -O3 -ffast-math -o CMakeFiles/pupok.dir/main.cpp.o -c /home/bogdan/Документы/PycharmProjects/pupok/main.cpp",
+  "file": "/home/bogdan/Документы/PycharmProjects/pupok/main.cpp",
+  "output": "CMakeFiles/pupok.dir/main.cpp.o"
+}
+]

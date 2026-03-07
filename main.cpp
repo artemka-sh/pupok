@@ -108,8 +108,8 @@ public:
         Matx22d Tx_out = transformTwiss(Tx, Mx);
         Matx22d Ty_out = transformTwiss(Ty, My);
 
-        return pow(Tx_out(0, 0) - 8.0, 2) + pow(-Tx_out(0, 1) - 0.0, 2) +
-               pow(Ty_out(0, 0) - 4.0, 2) + pow(-Ty_out(0, 1) - 0.0, 2);
+        return pow((Tx_out(0, 0) - 8.0), 2) + pow(-Tx_out(0, 1) - 0.0, 2) +
+               pow((Ty_out(0, 0) - 4.0), 2) + pow(-Ty_out(0, 1) - 0.0, 2);
     }
 };
 
@@ -146,7 +146,7 @@ void onTrackbar(int pos, void*) {
     Mat view3d(600, 800, CV_8UC3, Scalar(255, 255, 255));
 
     // Рисуем кольцо трубы/магнита
-    int ring_radius = 200;
+    int ring_radius = 250;
     if (st.is_magnet) {
         circle(view3d, Point(400, 300), ring_radius, Scalar(200, 255, 200), -1); // Зеленая заливка
         circle(view3d, Point(400, 300), ring_radius, Scalar(0, 150, 0), 4);      // Зеленый контур
@@ -176,15 +176,15 @@ int main() {
     Ptr<DownhillSolver> solver = DownhillSolver::create();
     solver->setFunction(makePtr<BeamMatchingObjective>());
     Mat x = (Mat_<double>(1, 4) << 0.5, -0.5, 0.5, -0.5);
-    Mat step = (Mat_<double>(1, 4) << 0.05, 0.05, 0.05, 0.05);
+    Mat step = (Mat_<double>(1, 4) << 0.05, 0.05, 0.01, 0.01);
     solver->setInitStep(step);
-    solver->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER + TermCriteria::EPS, 5000, 1e-6));
+    solver->setTermCriteria(TermCriteria(TermCriteria::MAX_ITER + TermCriteria::EPS, 50000, 1e-10));
 
     solver->minimize(x);
     double* K = x.ptr<double>();
 
     // 2. Генерация данных (Tracking)
-    double ds = 0.01, L_drift = 1.0, L_quad = 0.5, s_curr = 0;
+    double ds = 0.005, L_drift = 1.0, L_quad = 0.5, s_curr = 0;
 
     // Начальные параметры
     Matx22d Tx(5.0, 0.5, 0.5, 1.25/5.0);
