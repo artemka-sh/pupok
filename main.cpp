@@ -293,7 +293,7 @@ int main() {
     onTrackbar(0, 0);
 
     cout << "Optimization Done." << endl;
-    cout << "K1=" << K[0] << " K2=" << K[1] << " K3=" << K[2] << " K4=" << K[3] << endl;
+    cout << "K1=" << K[0] << " K2=" << K[1] << " K3=" << K[2] << " K4=" << K[3] << " K5(Dipole Angle)=" << dip_angle << endl;
     cout << "Final Dispersion Dx = " << history.back().dx << " m" << endl;
 
     waitKey(0);
