@@ -11,10 +11,11 @@ struct Particle {
     double y, yp;
 };
 
+// Добавили elem_type: 0 - Дрейф, 1 - Квадруполь, 2 - Диполь
 struct BeamState {
     double s;
     double bx, ax, by, ay;
-    bool is_magnet;
+    int elem_type;
     vector<Particle> particles;
 };
 
@@ -27,12 +28,10 @@ Matx22d getDrift(double L) {
 }
 
 Matx22d getDipole(double L, double angle, bool is_x) {
-    if (is_x) {
-        double rho = L / angle;
-        return Matx22d(cos(angle), rho * sin(angle), -(1.0/rho) * sin(angle), cos(angle));
-    } else {
-        return getDrift(L);
-    }
+    // Защита от деления на ноль при малых углах
+    if (!is_x || std::abs(angle) < 1e-9) return getDrift(L);
+    double rho = L / angle;
+    return Matx22d(cos(angle), rho * sin(angle), -(1.0/rho) * sin(angle), cos(angle));
 }
 
 Matx22d getQuad(double L, double K, bool is_x) {
@@ -94,9 +93,10 @@ class BeamMatchingObjective : public MinProblemSolver::Function {
 public:
     int getDims() const override { return 4; }
     double calc(const double* x) const override {
-        double L_drift = 1.0, L_quad = 0.5;
+        double L_drift = 1.0, L_quad = 0.5, L_dipole = 1.0, dip_angle = 0.1;
         Matx22d Mx = Matx22d::eye(), My = Matx22d::eye();
 
+        // 4 секции согласующего участка
         for (int i = 0; i < 4; ++i) {
             Mx = getQuad(L_quad, x[i], true) * getDrift(L_drift) * Mx;
             My = getQuad(L_quad, x[i], false) * getDrift(L_drift) * My;
@@ -104,12 +104,18 @@ public:
         Mx = getDrift(L_drift) * Mx;
         My = getDrift(L_drift) * My;
 
+        // Добавляем инжекторный диполь в конец системы
+        Mx = getDipole(L_dipole, dip_angle, true) * Mx;
+        My = getDipole(L_dipole, dip_angle, false) * My;
+
+        // Стартовые параметры (Таблица 1)
         Matx22d Tx(5.0, 0.5, 0.5, (1 + 0.5 * 0.5) / 5.0);
         Matx22d Ty(2.5, -0.3, -0.3, (1 + 0.3 * 0.3) / 2.5);
 
         Matx22d Tx_out = transformTwiss(Tx, Mx);
         Matx22d Ty_out = transformTwiss(Ty, My);
 
+        // Целевые параметры (Таблица 2) на ВЫХОДЕ из диполя
         return pow((Tx_out(0, 0) - 8.0), 2) + pow(-Tx_out(0, 1) - 0.0, 2) +
                pow((Ty_out(0, 0) - 4.0), 2) + pow(-Ty_out(0, 1) - 0.0, 2);
     }
@@ -117,7 +123,7 @@ public:
 
 void drawPhaseEllipse(Mat& img, double beta, double alpha, double epsilon, Scalar color, string label) {
     int cx = img.cols / 2, cy = img.rows / 2;
-    double scale_pos = 150.0 / 3e-4; // Жесткий масштаб для честного вида
+    double scale_pos = 150.0 / 3e-4;
     double scale_ang = 150.0 / 1e-4;
 
     vector<Point> pts;
@@ -138,19 +144,24 @@ void onTrackbar(int pos, void*) {
 
     Mat phase = Mat::zeros(400, 400, CV_8UC3);
     drawPhaseEllipse(phase, st.bx, st.ax, eps_x, Scalar(0, 0, 255), "X: " + std::to_string(st.bx) + "; X': " + std::to_string(st.ax) + ";");
-    drawPhaseEllipse(phase, st.by, st.ay, eps_y, Scalar(255, 0, 0), "Y: " + std::to_string(st.by) + "; Yi': " + std::to_string(st.ay) + ";");
+    drawPhaseEllipse(phase, st.by, st.ay, eps_y, Scalar(255, 0, 0), "Y: " + std::to_string(st.by) + "; Y': " + std::to_string(st.ay) + ";");
     imshow("Phase Space (X-x', Y-y')", phase);
 
     Mat view3d(600, 800, CV_8UC3, Scalar(255, 255, 255));
-
     int ring_radius = 250;
-    if (st.is_magnet) {
-        circle(view3d, Point(400, 300), ring_radius, Scalar(200, 255, 200), -1); // Зеленая заливка
-        circle(view3d, Point(400, 300), ring_radius, Scalar(0, 150, 0), 4);      // Зеленый контур
+
+    // Визуализация типа элемента
+    if (st.elem_type == 1) { // Квадруполь
+        circle(view3d, Point(400, 300), ring_radius, Scalar(200, 255, 200), -1);
+        circle(view3d, Point(400, 300), ring_radius, Scalar(0, 150, 0), 4);
         putText(view3d, "QUADRUPOLE MAGNET", Point(20, 60), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(0, 100, 0), 2);
-    } else {
-        circle(view3d, Point(400, 300), ring_radius, Scalar(240, 240, 240), -1); // Серая заливка
-        circle(view3d, Point(400, 300), ring_radius, Scalar(150, 150, 150), 2);  // Серый контур
+    } else if (st.elem_type == 2) { // Диполь
+        circle(view3d, Point(400, 300), ring_radius, Scalar(255, 220, 200), -1); // Синеватая заливка (BGR)
+        circle(view3d, Point(400, 300), ring_radius, Scalar(255, 0, 0), 4);      // Синий контур
+        putText(view3d, "INJECTION DIPOLE", Point(20, 60), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(200, 0, 0), 2);
+    } else { // Дрейф
+        circle(view3d, Point(400, 300), ring_radius, Scalar(240, 240, 240), -1);
+        circle(view3d, Point(400, 300), ring_radius, Scalar(150, 150, 150), 2);
         putText(view3d, "DRIFT SPACE", Point(20, 60), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(100, 100, 100), 2);
     }
 
@@ -177,28 +188,59 @@ int main() {
     solver->minimize(x);
     double* K = x.ptr<double>();
 
-    double ds = 0.005, L_drift = 1.0, L_quad = 0.5, s_curr = 0;
+    double ds = 0.005, L_drift = 1.0, L_quad = 0.5, L_dipole = 1.0, dip_angle = 0.1;
+    double s_curr = 0;
 
     Matx22d Tx(5.0, 0.5, 0.5, 1.25/5.0);
     Matx22d Ty(2.5, -0.3, -0.3, 1.09/2.5);
-    auto beam = generateBeam(800, Tx(0,0), -Tx(0,1), Ty(0,0), -Ty(0,1)); // 800 частиц
+    auto beam = generateBeam(800, Tx(0,0), -Tx(0,1), Ty(0,0), -Ty(0,1));
 
-    auto track = [&](double L, double k) {
+    // Функция пролета дрейфа
+    auto track_drift = [&](double L) {
         for (double t = 0; t < L; t += ds) {
-            history.push_back({s_curr, Tx(0, 0), -Tx(0, 1), Ty(0, 0), -Ty(0, 1), std::abs(k) > 1e-6, beam});
+            history.push_back({s_curr, Tx(0, 0), -Tx(0, 1), Ty(0, 0), -Ty(0, 1), 0, beam});
+            Matx22d M_step = getDrift(ds);
+            Tx = transformTwiss(Tx, M_step);
+            Ty = transformTwiss(Ty, M_step);
+            propagateParticles(beam, M_step, M_step);
+            s_curr += ds;
+        }
+    };
 
+    // Функция пролета квадруполя
+    auto track_quad = [&](double L, double k) {
+        for (double t = 0; t < L; t += ds) {
+            history.push_back({s_curr, Tx(0, 0), -Tx(0, 1), Ty(0, 0), -Ty(0, 1), 1, beam});
             Matx22d Mx_step = getQuad(ds, k, true);
             Matx22d My_step = getQuad(ds, k, false);
             Tx = transformTwiss(Tx, Mx_step);
             Ty = transformTwiss(Ty, My_step);
             propagateParticles(beam, Mx_step, My_step);
-
             s_curr += ds;
         }
     };
 
-    for(int i=0; i<4; ++i) { track(L_drift, 0); track(L_quad, K[i]); }
-    track(L_drift, 0);
+    // Новая функция: пролет инжекторного диполя
+    auto track_dipole = [&](double L, double angle) {
+        for (double t = 0; t < L; t += ds) {
+            history.push_back({s_curr, Tx(0, 0), -Tx(0, 1), Ty(0, 0), -Ty(0, 1), 2, beam});
+            double step_angle = angle * (ds / L); // Пропорциональный угол на шаг интегрирования
+            Matx22d Mx_step = getDipole(ds, step_angle, true);
+            Matx22d My_step = getDipole(ds, step_angle, false);
+            Tx = transformTwiss(Tx, Mx_step);
+            Ty = transformTwiss(Ty, My_step);
+            propagateParticles(beam, Mx_step, My_step);
+            s_curr += ds;
+        }
+    };
+
+    // Строим линию: 4 ячейки Дрейф+Квадруполь, затем Дрейф и в конце — Инжекторный диполь
+    for(int i=0; i<4; ++i) {
+        track_drift(L_drift);
+        track_quad(L_quad, K[i]);
+    }
+    track_drift(L_drift);
+    track_dipole(L_dipole, dip_angle); // Инжекция в кольцо
 
     int w = 1200, h = 400;
     Mat plot = Mat::ones(h, w, CV_8UC3) * 255;
@@ -210,15 +252,19 @@ int main() {
     };
 
     for(size_t i=1; i<history.size(); ++i) {
-        if(history[i].is_magnet) {
-            line(plot, toPx(history[i].s, 0), Point(toPx(history[i].s, 0).x, 50), Scalar(240,240,240), 2);
+        // Подкраска фона под магнитами (Зеленоватый - квад, Синеватый - диполь)
+        if(history[i].elem_type == 1) {
+            line(plot, toPx(history[i].s, 0), Point(toPx(history[i].s, 0).x, 50), Scalar(230,245,230), 2);
+        } else if (history[i].elem_type == 2) {
+            line(plot, toPx(history[i].s, 0), Point(toPx(history[i].s, 0).x, 50), Scalar(255,230,210), 2);
         }
+
         line(plot, toPx(history[i-1].s, history[i-1].bx), toPx(history[i].s, history[i].bx), Scalar(0,0,255), 2, LINE_AA);
         line(plot, toPx(history[i-1].s, history[i-1].by), toPx(history[i].s, history[i].by), Scalar(0,255,255), 2, LINE_AA);
     }
 
     line(plot, Point(50, h-50), Point(w-50, h-50), Scalar(0,0,0), 2);
-    putText(plot, "Beam Envelope: Red (X), Blue (Y)", Point(60, 40), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(50,0,255), 1);
+    putText(plot, "Beam Envelope: Red (X), Yellow (Y). Green bg = Quad, Blue bg = Dipole", Point(60, 40), FONT_HERSHEY_SIMPLEX, 0.6, Scalar(50,50,50), 1);
 
     int slider = 0;
     createTrackbar("Position S", "Beam Envelope", &slider, history.size()-1, onTrackbar);
